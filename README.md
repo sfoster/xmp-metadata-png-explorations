@@ -8,7 +8,8 @@
 
 ## Status
 
-- Eh. Kinda working. The iterating through the chunks and finding the IHDR chunk seems good. The XML document format should be good. The chunk creation and its various parts - including the data length and CRC - seems good. But the actual XML text data doesnt seem to be encoded correctly or something. exiftool just shows a `XMP` tag with the XML string, not the tags it contains. 
+- Eh. Kinda working. The iterating through the chunks and finding the IHDR chunk seems good. The XML document format should be good. The chunk creation and its various parts - including the data length and CRC - seems good. 
+- But the actual XML text data doesnt seem to be encoded correctly or something. I "fixed" the keyword to be "'XML:com.adobe.xmp'". But now exiftool now shows a garbled keyword: `XM Lcomadobexmp                 : <?xpacket...` and nothing at all for `-XMP`. 
 
 ## Notes: PNG Images and metadata
 
@@ -71,6 +72,7 @@ A PNG file comprises
 <?xpacket end='w'?>
 ```
 - Those `<?xpacket>` tags are delimiters and necessary. The id is a default given by Adobe and can be used as-is
+- The keyword we want for this is apparently 'XML:com.adobe.xmp'.
 - To inject XMP from a .xml file: 
   - `exiftool '-XMP<=xmp_metadata.xml' image.png`
   - Via https://exiftool.org/forum/index.php?topic=2922.0 
