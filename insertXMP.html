@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iTXT PNG Chunk tets</title>
+  <style type="text/css">
+    img {
+      width: 64px;
+      height: 64px;
+    }
+  </style>
+  <script type="module">
+    import { ITXtChunkEncoder, insertCustomChunk, getChunkAtIndex } from "./png-text-chunks.mjs";
+
+    async function fetchImageAsArrayBuffer(url) {
+      const response = await fetch(url);
+      return response.arrayBuffer();
+    }
+
+    function blobToDataUrl(blob){
+      let reader = new FileReader()
+      return new Promise(resolve => {
+        reader.onload = function(){
+          resolve(reader.result);
+        }
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function getChunksFromPNGArrayBuffer(imgBuffer) {
+      let offset = 8; // for the signature
+      let len = imgBuffer.byteLength;
+      let iHDROffsets = [0,0];
+      let chunks = new Map();
+      console.log("imgBuffer", imgBuffer);
+      console.log(`getChunksFromPNGArrayBuffer, offset: ${offset}, len: ${len}`);
+
+      while(!isNaN(offset) && offset < len) {
+        let { nextIndex, chunkType } = getChunkAtIndex(imgBuffer, offset);
+        // the offset of the next chunk is 4 (length) + 4 (type) + chunkLength + 4 (CRC)
+        chunks.set(offset, chunkType);
+        offset = nextIndex;
+        console.log(`getChunksFromPNGArrayBuffer, offset: ${offset}, len: ${len}`);
+      }
+      return chunks;
+    }
+
+    async function main() {
+      const outputImg = document.getElementById("output-img");
+      // "./2x2.png"
+      const imgBuffer = await fetchImageAsArrayBuffer(document.getElementById("source-img").src);
+      // create the new XMP iTXT chunk
+      const keyword = "XMP";
+      const metadata = {
+        resourceUrl: "https://foo.com/",
+        title: "The image title",
+        description: "The image description",
+      };
+      const xmpData = `<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description rdf:about="${metadata.resourceUrl}"
+            xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>
+                <rdf:Alt>
+                    <rdf:li xml:lang="x-default">${metadata.title}</rdf:li>
+                </rdf:Alt>
+            </dc:title>
+            <dc:description>
+                <rdf:Alt>
+                    <rdf:li xml:lang="x-default">${metadata.description}</rdf:li>
+                </rdf:Alt>
+            </dc:description>
+        </rdf:Description>
+    </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>`.trim();
+
+      let chunkEncoder = new ITXtChunkEncoder("en");
+      const xmpITXtChunk = chunkEncoder.getChunk(xmpData, keyword);
+      console.log("xmp chunk", xmpITXtChunk, xmpITXtChunk.length);
+
+      // insert the new chunk
+      console.log("loaded imgBuffer", imgBuffer);
+      const modifiedImgBuffer = insertCustomChunk(imgBuffer, xmpITXtChunk);
+
+      const imageBlob = new Blob([modifiedImgBuffer], { type: 'image/png' });
+
+      // 
+      const url = URL.createObjectURL(imageBlob);
+      let dataUrl = await blobToDataUrl(imageBlob);
+
+      console.log("parsing chunks back out of the modified image");
+      console.log("chunks:", getChunksFromPNGArrayBuffer(modifiedImgBuffer));
+
+      outputImg.parentNode.href = dataUrl;
+      outputImg.onload = () => {
+        URL.revokeObjectURL(url);
+      };
+      outputImg.src = url;
+    }
+
+    window.onload = () => {
+      main();
+    }
+  </script>
+</head>
+<body>
+  <p>Input image:<img id="source-img" src="./2x2.png"></p>
+  <p>XMP tagged output image: <a href="" download="2x2-js-tagged.png"><img id="output-img" src="./2x2.png"></a></p>
+</body>
+</html>
