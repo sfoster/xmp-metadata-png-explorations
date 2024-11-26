@@ -51,7 +51,7 @@
       // "./2x2.png"
       const imgBuffer = await fetchImageAsArrayBuffer(document.getElementById("source-img").src);
       // create the new XMP iTXT chunk
-      const keyword = "XMP";
+      const keyword = "XML:com.adobe.xmp";
       const metadata = {
         resourceUrl: "https://foo.com/",
         title: "The image title",

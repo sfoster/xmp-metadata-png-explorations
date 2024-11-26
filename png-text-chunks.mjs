@@ -20,14 +20,15 @@ export class ITXtChunkEncoder {
   constructor(language="en", compression=0) {
     // The compression method field is provided for possible future expansion or
     // proprietary variants
-    this.compressionMethod = 0;
     this.compressionFlag = new Uint8Array([compression]); // 0 for uncompressed, 1 for compressed
+    this.compressionMethod = new Uint8Array([0]);
     this.languageEncoded = encoder.encode(language);
   }
   getChunk(text="", keyword="Comment", translatedKeyword="") {
     const nullSeparator = new Uint8Array([0]);
     const textEncoded = encoder.encode(text);
     const keywordEncoded = encoder.encode(keyword);
+    console.log("keywordEncoded", keywordEncoded);
     const translatedKeywordEncoded = encoder.encode(translatedKeyword || keyword);
     const typeEncoded = encoder.encode('iTXt');
 
@@ -48,6 +49,7 @@ export class ITXtChunkEncoder {
       keywordEncoded,
       nullSeparator,
       this.compressionFlag,
+      this.compressionMethod,
       this.languageEncoded,
       nullSeparator,
       translatedKeywordEncoded,
