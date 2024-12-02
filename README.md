@@ -8,8 +8,11 @@
 
 ## Status
 
-- Eh. Kinda working. The iterating through the chunks and finding the IHDR chunk seems good. The XML document format should be good. The chunk creation and its various parts - including the data length and CRC - seems good. 
-- But the actual XML text data doesnt seem to be encoded correctly or something. I "fixed" the keyword to be "'XML:com.adobe.xmp'". But now exiftool now shows a garbled keyword: `XM Lcomadobexmp                 : <?xpacket...` and nothing at all for `-XMP`. 
+- Working, but no support for the "Language keyword" or "Translated keyword" fields. Those are currently empty - adding them throws something off. 
+
+## Usage & TODO
+
+See insertXMP.html for usage. Probably I'll move some of the XMP boilerplate into the png-text-chunks module as well. 
 
 ## Notes: PNG Images and metadata
 
