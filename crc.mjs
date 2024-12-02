@@ -4,11 +4,11 @@
 */
 
 /* Table of CRCs of all 8-bit messages. */
-const crc_table = new Uint8Array(256);
-let crc_table_computed = 0;
+const crcTable = new Uint8Array(256);
+let crcTableComputed = 0;
 
 /* Make the table for a fast CRC. */
-function make_crc_table() {
+function makeCrcTable() {
  let c, n, k;
 
  for (n = 0; n < 256; n++) {
@@ -19,22 +19,22 @@ function make_crc_table() {
      else
        c = c >> 1;
    }
-   crc_table[n] = c;
+   crcTable[n] = c;
  }
- crc_table_computed = 1;
+ crcTableComputed = 1;
 }
 
 /* Update a running CRC with the bytes buf[0..len-1]--the CRC
   should be initialized to all 1's, and the transmitted value
   is the 1's complement of the final running CRC (see the
-  crc() routine below)). */
+  computeCrc() routine below.) */
 
 function update_crc(crc, buf, len) {
   let c = crc;
   let n = 0;
 
   for (n = 0; n < len; n++) {
-    c = crc_table[(c ^ buf[n]) & 0xff] ^ (c >> 8);
+    c = crcTable[(c ^ buf[n]) & 0xff] ^ (c >> 8);
   }
   return c;
 }
@@ -44,8 +44,8 @@ function computeCrc(buf) {
   return update_crc(0xffffffff, buf, buf.length) ^ 0xffffffff;
 }
 
-if (!crc_table_computed) {
-  make_crc_table();
+if (!crcTableComputed) {
+  makeCrcTable();
 }
 
-export { computeCrc, crc_table as crcLookupTable };
+export { computeCrc, crcTable as crcLookupTable };
