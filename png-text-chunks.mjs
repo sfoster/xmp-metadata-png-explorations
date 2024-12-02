@@ -1,16 +1,14 @@
-import { computeCrc, crcLookupTable } from "./crc.mjs";
-
 const encoder = new TextEncoder('utf-8')
 const decoder = new TextDecoder();
 
 // Helper to convert a 32-bit integer to a 4-byte big-endian array
 export function uint32ToBytes(value) {
-    return new Uint8Array([
-        (value >>> 24) & 0xff,
-        (value >>> 16) & 0xff,
-        (value >>> 8) & 0xff,
-        value & 0xff,
-    ]);
+  return new Uint8Array([
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff,
+  ]);
 }
 
 export const predefinedKeywords = new Set([
@@ -26,6 +24,15 @@ export const predefinedKeywords = new Set([
  "Comment",          // Miscellaneous comment
 ]);
 
+/*
+ * Assemble a PNG "iTXT" chunk using the provided text and keyword
+ *
+ * @param {String} text
+ *   The text data for the chunk. See http://www.libpng.org/pub/png/spec/1.2/PNG-Chunks.html for details.
+ * @param {String} keyword
+ *   The keyword to use. Either one of the predefined keywords or one known to the target software
+ * @returns {Uint8Array}
+*/
 export function createITXtChunk(text, keyword="XML:com.adobe.xmp") {
   const chunkType = encoder.encode('iTXt');
 
@@ -100,6 +107,15 @@ export function createITXtChunk(text, keyword="XML:com.adobe.xmp") {
   return chunk;
 }
 
+/*
+ * Unpack the PNG chunk at the given index into its main parts
+ *
+ * @param {ArrayBuffer} imgBuffer
+ *   A buffer representing the binary the PNG image data
+ * @param {Number} offset
+ *   The byte offset of the chunk we want
+ * @returns {Object}
+*/
 export function getChunkAtIndex(imgBuffer, offset) {
   // First 4 bytes (0-3) are the chunk length
   // A 4-byte unsigned integer giving the number of bytes in the chunk's data field.
@@ -129,8 +145,20 @@ export function getChunkAtIndex(imgBuffer, offset) {
   return chunkObject;
 }
 
+/*
+ * Insert a byte array into a buffer at a given offset
+ *
+ * @param {Uint8Array} byteArray
+ *   The binary data to insert as an array of 8-bit unsigned integers
+ * @param {ArrayBuffer} targetBuffer
+ *   A buffer representing the binary data we want to insert the new data into
+ * @param {Number} offset
+ *   The byte offset into the target to insert the byteArray at
+ * @returns {ArrayBuffer}
+*/
 function insertBytes(byteArray, targetBuffer, offset) {
   var targetArray = new Uint8Array(targetBuffer);
+  console.log("insertBytes, targetBuffer:", targetBuffer, targetBuffer instanceof ArrayBuffer);
 
   // Check if the offset is within the bounds of the target array
   if (offset < 0 || offset > targetArray.length) {
@@ -139,7 +167,6 @@ function insertBytes(byteArray, targetBuffer, offset) {
 
   // Create a new ArrayBuffer that is large enough to hold the combined data
   var newBuffer = new ArrayBuffer(targetArray.length + byteArray.length);
-  console.log("Creating newBuffer of length:", targetArray.length, targetArray.length + byteArray.length);
   var newArray = new Uint8Array(newBuffer);
 
   // Copy the original data to the new array up to the offset
@@ -171,4 +198,53 @@ export function insertCustomChunk(imgBuffer, textChunk) {
   }
   // console.log("IHDR offsets:", iHDROffsets);
   return insertBytes(textChunk, imgBuffer, iHDROffsets[1]);
+}
+
+/*
+ * Implementation of the CRC (Cyclic Redundancy Check) employed in PNG chunks
+ * Ported from http://www.libpng.org/pub/png/spec/1.2/PNG-CRCAppendix.html
+*/
+
+/* Table of CRCs of all 8-bit messages. */
+const crcTable = new Uint8Array(256);
+let crcTableComputed = 0;
+
+/* Make the table for a fast CRC. */
+function makeCrcTable() {
+ let c, n, k;
+
+ for (n = 0; n < 256; n++) {
+   c = n;
+   for (k = 0; k < 8; k++) {
+     if (c & 1)
+       c = 0xedb88320 ^ (c >> 1);
+     else
+       c = c >> 1;
+   }
+   crcTable[n] = c;
+ }
+ crcTableComputed = 1;
+}
+
+/* Update a running CRC with the bytes buf[0..len-1]--the CRC
+  should be initialized to all 1's, and the transmitted value
+  is the 1's complement of the final running CRC (see the
+  computeCrc() routine below.) */
+
+function updateCrc(crc, buf, len) {
+  let c = crc;
+  let n = 0;
+
+  for (n = 0; n < len; n++) {
+    c = crcTable[(c ^ buf[n]) & 0xff] ^ (c >> 8);
+  }
+  return c;
+}
+
+/* Return the CRC of the bytes buf[0..len-1]. */
+function computeCrc(buf) {
+  if (!crcTableComputed) {
+    makeCrcTable();
+  }
+  return updateCrc(0xffffffff, buf, buf.length) ^ 0xffffffff;
 }

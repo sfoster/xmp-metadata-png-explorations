@@ -79,7 +79,7 @@
 <?xpacket end='w'?>`;
 
       const xmpITXtChunk = createITXtChunk(xmpData, keyword);
-      console.log("xmp chunk", xmpITXtChunk, xmpITXtChunk.length);
+      console.log("xmp chunk", xmpITXtChunk, xmpITXtChunk.length, xmpITXtChunk instanceof ArrayBuffer );
 
       // insert the new chunk
       console.log("loaded imgBuffer", imgBuffer);
