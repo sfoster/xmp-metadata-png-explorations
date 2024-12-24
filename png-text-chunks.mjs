@@ -1,5 +1,6 @@
 const encoder = new TextEncoder('utf-8')
 const decoder = new TextDecoder();
+let xmlParser;
 
 // Helper to convert a 32-bit integer to a 4-byte big-endian array
 export function uint32ToBytes(value) {
@@ -144,6 +145,148 @@ export function getChunkAtIndex(imgBuffer, offset) {
   }
   return chunkObject;
 }
+
+/*
+ * Get chunks from a PNG ArrayBuffer
+ *
+ * @param {ArrayBuffer} imgBuffer
+ *   The binary data that is the PNG image data
+ * @param {Function} matchFn
+ *   An optional matchFn used to identify the first chunk. E.g first of a particular type.
+ *   If the matchFn is given, only the matched chunk will be returned
+ * @returns {Map} chunk objects keyed by their offset into the buffer, each with type, offsets etc.
+*/
+export function getChunksFromPNGArrayBuffer(imgBuffer, handleChunk) {
+  let offset = 8; // for the signature
+  let len = imgBuffer.byteLength;
+  let chunks = new Map();
+  //console.log("imgBuffer", imgBuffer);
+  //console.log(`getChunksFromPNGArrayBuffer, offset: ${offset}, len: ${len}`);
+
+  while(!isNaN(offset) && offset < len) {
+    let chunk = getChunkAtIndex(imgBuffer, offset);
+    // the offset of the next chunk is 4 (length) + 4 (type) + chunkLength + 4 (CRC)
+    chunks.set(offset, chunk);
+    //console.log(`getChunksFromPNGArrayBuffer, offset: ${offset}, len: ${len}`,chunk);
+    const shouldContinue = handleChunk(chunk);
+    if (!shouldContinue) {
+      break;
+    }
+    offset = chunk.nextIndex;
+  }
+  return chunks;
+}
+
+/*
+ * Get an XML Document representing the text data from an already-decoded iTXtData chunk
+ *
+ * @param {String} decodedData
+ * @returns {(XMLDocument|null)} The parsed XMP document or null if parsing failed
+*/
+function getXMPDocumentFromITxTData(decodedData) {
+  function findParts(str, [startStr,qualifierStr,endStr]) {
+    if (!endStr) {
+      endStr = qualifierStr;
+      qualifierStr = null;
+    }
+    let startIndex = str.indexOf(startStr);
+    if (startIndex < 0) {
+      throw new Error("Didnt find the ?xpacket marker");
+    }
+    let endIndex = str.substring(startIndex).indexOf(endStr);
+    if (endIndex < 0) {
+      throw new Error("Didnt find the ?xpacket marker close");
+    }
+    endIndex += startIndex + endStr.length;
+    if (qualifierStr && str.substring(startIndex, endIndex).indexOf(qualifierStr) < 0) {
+      startIndex = endIndex = -1;
+    }
+    return {
+      start: startIndex,
+      end: endIndex,
+    };
+  }
+  let remainder = decodedData;
+  let xmlDocument;
+  let beginMarkerOffsets, endMarkerOffsets;
+
+  try {
+    beginMarkerOffsets = findParts(remainder, ["<?xpacket", "begin", "?>"]);
+  } catch (ex) {
+    console.warn(ex);
+  }
+  if (beginMarkerOffsets.start < 0 || beginMarkerOffsets.end <= beginMarkerOffsets.start) {
+    console.warn("Didn't find the begin marker");
+    return null;
+  }
+  remainder = remainder.substring(beginMarkerOffsets.end);
+
+  try {
+    endMarkerOffsets = findParts(remainder, ["<?xpacket", "end", "?>"]);
+  } catch (ex) {
+    console.warn(ex);
+  }
+  if (endMarkerOffsets.start < 0 || endMarkerOffsets.end <= endMarkerOffsets.start) {
+    console.warn("Didn't find the end marker");
+    return null;
+  }
+  remainder = remainder.substring(0, endMarkerOffsets.start);
+  if (!xmlParser) {
+    xmlParser = new DOMParser();
+  }
+  try {
+    xmlDocument = xmlParser.parseFromString(remainder, "application/xml");
+  } catch (ex) {
+    console.warn("Failed to parse XML string:", remainder, ex);
+    throw new Error(ex.message)
+  }
+  const metadata = {
+    // <rdf:Description rdf:about=".."  >
+    resourceUrl: xmlDocument.querySelector("Description")?.getAttribute("rdf:about"),
+    // <dc:title> <rdf:li>...
+    title: xmlDocument.querySelector("title li")?.textContent,
+    // <rdf:Description> <dc:description> <rdf:li>...
+    description: xmlDocument.querySelector("Description > description li")?.textContent,
+  };
+  return metadata;
+}
+
+/*
+ * Extract the XMP metadata from a PNG ArrayBuffer.
+ *
+ * @param {ArrayBuffer} imgBuffer
+ *   The binary data that is the PNG image data
+ * @returns {Object}
+*/
+export async function getImageMetadata(imgBuffer) {
+  const metadata = {};
+  const chunksByIndex = getChunksFromPNGArrayBuffer(imgBuffer, function handleChunk(chunk) {
+    let shouldContinue = true;
+    console.log("getImageMetadata, type:", chunk.chunkType);
+    if (chunk.chunkType == "iTXt") {
+      // To further parse the text data, we need to know what kind of stuff is in there.
+      // which is indicated by the initial `keyword` field
+      const keyword = chunk.decodedData.split("\0")[0];
+      console.log("getImageMetadata, keyword:", keyword, chunk);
+      switch (keyword) {
+        case "XML:com.adobe.xmp":
+          // extract properties from the XMP data
+          let result = getXMPDocumentFromITxTData(chunk.decodedData);
+          if (result) {
+            Object.assign(metadata, result);
+          }
+          break;
+        default:
+          // do nothing for now
+      }
+    } else if (chunk.chunkType == "IDAT") {
+      shouldContinue = false;
+    }
+    return shouldContinue;
+  });
+  return metadata;
+}
+
 
 /*
  * Insert a byte array into a buffer at a given offset

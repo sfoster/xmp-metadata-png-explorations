@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PNG with XMP/iTXT</title>
+  <style type="text/css">
+    img {
+      width: 64px;
+      height: 64px;
+    }
+  </style>
+  <script type="module">
+    import { getChunksFromPNGArrayBuffer, getChunkAtIndex, getImageMetadata } from "./png-text-chunks.mjs";
+
+    async function fetchImageAsArrayBuffer(url) {
+      const response = await fetch(url);
+      return response.arrayBuffer();
+    }
+
+    const app = window.app = new (class _App {
+      init() {
+        this.dropTarget = document.getElementById('drop-zone');
+        this.dropTarget.addEventListener('dragover', this);
+        this.dropTarget.addEventListener('drop', this);
+
+        this.sourceImage = document.getElementById("source-img");
+        this.sourceImage.addEventListener("load", (e) => {
+          this.displayImageMetadata(this.sourceImage, { fileName: this.sourceImage.dataset.fileName });
+        });
+        if (this.sourceImage.complete) {
+          let fileName = this.sourceImage.src.split("/").pop();
+          this.sourceImage.dataset.fileName = fileName;
+          this.displayImageMetadata(document.getElementById("source-img"), { fileName });
+        }
+      }
+      reset() {
+        this.showResults("");
+      }
+      handleEvent(event) {
+        if (event.type == "dragover") {
+          event.preventDefault(); // Prevent default behavior (Prevent file from being opened)
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'copy'; // Show the copy icon when dragging over (optional)
+          return;
+        }
+        if (event.type == "drop") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer.files.length) {
+            let file = event.dataTransfer.files[0];
+            console.log("Dropped file:", file);
+            if (file.type.startsWith('image/')) {
+              // Assuming the file is an image
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                this.sourceImage.dataset.fileName = file.name;
+                this.sourceImage.src = e.target.result;
+              };
+              reader.readAsDataURL(file); // Read the file as a Data URL
+            } else {
+              alert('Please drop an image file.');
+              this.reset();
+            }
+          }
+        }
+      }
+
+      showResults(results) {
+        document.getElementById("metadata-output").textContent = results ? JSON.stringify(results, null, 2) : "";
+      }
+      async displayImageMetadata(img, details = {}) {
+        const imgBuffer = await fetchImageAsArrayBuffer(img.src);
+
+        return getImageMetadata(imgBuffer).then(metadata => {
+          this.showResults({
+            ...details,
+            ...metadata
+          });
+        });
+      }
+    })();
+
+    window.onload = () => {
+      app.init();
+    }
+  </script>
+</head>
+<body>
+  <h1>Display XMP Metadata in a PNG with XMP/iTXT chunk</h1>
+  <section>
+    <div id="drop-zone" style="width: 200px; height: 200px; padding: 4px; border: 2px dashed #ccc;">
+      <img id="source-img" src="./2x2-js-tagged.png">
+    </div>
+  </section>
+
+  <pre id="metadata-output">
+  </pre>
+</p>
+</body>
+</html>
