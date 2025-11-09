@@ -121,6 +121,8 @@ export function getChunkAtIndex(imgBuffer, offset) {
   // First 4 bytes (0-3) are the chunk length
   // A 4-byte unsigned integer giving the number of bytes in the chunk's data field.
   // The length is the data field +  chunk type code + CRC.
+  console.assert(imgBuffer instanceof ArrayBuffer, "imgBuffer should be a ArrayBuffer");
+
   let lengthView = new DataView(imgBuffer, offset, 4);
   let dataLength = lengthView.getUint32(0);
 
@@ -132,6 +134,7 @@ export function getChunkAtIndex(imgBuffer, offset) {
     offset + 4 + 4,
     offset + 4 + 4 + dataLength,
   ];
+  console.log("get chunk from:", imgBuffer, dataPartOffsets[0], dataLength);
   const chunkObject = {
     startIndex: offset,
     chunkType,
@@ -175,6 +178,34 @@ export function getChunksFromPNGArrayBuffer(imgBuffer, handleChunk) {
     offset = chunk.nextIndex;
   }
   return chunks;
+}
+
+export function getImageProperties(imgBuffer) {
+  const [offsetIndex] = getIHDROffsets(imgBuffer);
+  if (!offsetIndex) {
+    // there should be at least the signature before the iHDR chunk
+    return null;
+  }
+  const iHDRChunk = getChunkAtIndex(imgBuffer, offsetIndex);
+  const dv = iHDRChunk.chunkDataView;
+  // from the spec: https://www.libpng.org/pub/png/spec/1.2/PNG-Chunks.html
+  // Width:              4 bytes
+  // Height:             4 bytes
+  // Bit depth:          1 byte
+  // Color type:         1 byte
+  // Compression method: 1 byte
+  // Filter method:      1 byte
+  // Interlace method:   1 byte
+  const properties = {
+    width: dv.getInt32(0),
+    height: dv.getInt32(4),
+    bitDepth: dv.getInt8(8),
+    colorType: dv.getInt8(9),
+    compression: dv.getInt8(10),
+    filter: dv.getInt8(11),
+    interlace: dv.getInt8(12),
+  };
+  return properties;
 }
 
 /*
@@ -288,13 +319,14 @@ export async function getImageMetadata(imgBuffer) {
       const keyword = chunk.decodedData.split("\0")[0];
       console.log("getImageMetadata, keyword:", keyword, chunk);
       switch (keyword) {
-        case "XML:com.adobe.xmp":
+        case "XML:com.adobe.xmp": {
           // extract properties from the XMP data
-          let result = getXMPDocumentFromITxTData(chunk.decodedData);
-          if (result) {
-            Object.assign(metadata, result);
+          const xmlDoc = getXMPDocumentFromITxTData(chunk.decodedData);
+          if (xmlDoc) {
+            Object.assign(metadata, getImageMetadataFromXMPDocument(xmlDoc) || {});
           }
           break;
+        }
         default:
           // do nothing for now
       }
@@ -306,8 +338,80 @@ export async function getImageMetadata(imgBuffer) {
   return metadata;
 }
 
+function buildXMPMetaDataString({
+  resourceUrl = "",
+  title = "",
+  description = "",
+} = {}, extended = {}) {
+  /* extended data format is a collection of name/values organized by namespace:
+     {
+        foo: ["http://www.foo.org/foo-syntax-ns#", { "foodie" : "yes" }],
+        bar: ["http://www.bar.net/xmp/bar", { "barfly": "nope" }],
+      }
+  */
+  console.log("buildXMPMetaDataString, ", resourceUrl, title, description, extended);
+  if (resourceUrl.length + title.length + description.length == 0) {
+    throw new Error("Can't insert all empty metadata into image");
+  }
+  const partTitle = title ? `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">${title}</rdf:li></rdf:Alt></dc:title>` : "";
+  const partDescription = title ? `<dc:description><rdf:Alt><rdf:li xml:lang="x-default">${description}</rdf:li></rdf:Alt></dc:description>` : "";
 
-/*
+  const descriptionAttrs = [];
+  const descriptionXmlns = [];
+  if (resourceUrl) {
+    descriptionAttrs.push(`rdf:about="${resourceUrl}"`);
+  }
+  // allow insertion of custom/extended attribute values
+  for (let [ns, nsUrlProperties] of Object.entries(extended)) {
+    // add the namespace
+    const [nsURL, properties] = nsUrlProperties;
+    descriptionXmlns.push(`xmlns:${ns}="${nsURL}"`);
+    // add the namespaced properties
+    for (let [pname, pvalue] of Object.entries(properties)) {
+      descriptionAttrs.push(`${ns}:${pname}="${pvalue}"`);
+    }
+  }
+
+  const xmpData = `
+<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" ${descriptionXmlns.join("")}>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description
+            ${descriptionAttrs.join(" ")}
+            xmlns:dc="http://purl.org/dc/elements/1.1/">
+            ${partTitle}
+            ${partDescription}
+        </rdf:Description>
+    </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>`;
+  return xmpData;
+}
+
+/**
+ * insertXMPMetaDataIntoImageBuffer
+ * @param {ArrayBuffer} imgBuffer
+ *   The binary data that is the PNG image data
+ * @param {Object} metadata
+ *   An object including optional title, description, resourceUrl properties
+ * @param {Object} extended (optiona)
+ *   See buildXMPMetaDataString for the data format for extended properties
+ */
+export async function insertXMPMetaDataIntoImageBuffer(imgBuffer, metadata, extended) {
+  // create the new XMP iTXT chunk
+  console.log("insertXMPMetaDataIntoImageBuffer, ", metadata, extended);
+  const keyword = "XML:com.adobe.xmp";
+  const xmpData = buildXMPMetaDataString(metadata, extended);
+  console.log("got xmpData:", xmpData);
+  const xmpITXtChunk = createITXtChunk(xmpData, keyword);
+
+  // insert the new chunk
+  return insertCustomChunk(imgBuffer, xmpITXtChunk);
+}
+
+
+
+/**
  * Insert a byte array into a buffer at a given offset
  *
  * @param {Uint8Array} byteArray
@@ -361,34 +465,6 @@ function getIHDROffsets(imgBuffer) {
     offset = nextIndex;
   }
   return iHDROffsets;
-}
-
-export function getImageProperties(imgBuffer) {
-  const [offsetIndex] = getIHDROffsets(imgBuffer);
-  if (!offsetIndex) {
-    // there should be at least the signature before the iHDR chunk
-    return null;
-  }
-  const iHDRChunk = getChunkAtIndex(imgBuffer, offsetIndex);
-  const dv = iHDRChunk.chunkDataView;
-  // from the spec: https://www.libpng.org/pub/png/spec/1.2/PNG-Chunks.html
-  // Width:              4 bytes
-  // Height:             4 bytes
-  // Bit depth:          1 byte
-  // Color type:         1 byte
-  // Compression method: 1 byte
-  // Filter method:      1 byte
-  // Interlace method:   1 byte
-  const properties = {
-    width: dv.getInt32(0),
-    height: dv.getInt32(4),
-    bitDepth: dv.getInt8(8),
-    colorType: dv.getInt8(9),
-    compression: dv.getInt8(10),
-    filter: dv.getInt8(11),
-    interlace: dv.getInt8(12),
-  };
-  return properties;
 }
 
 export function insertCustomChunk(imgBuffer, textChunk) {
