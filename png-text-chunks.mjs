@@ -240,14 +240,33 @@ function getXMPDocumentFromITxTData(decodedData) {
     console.warn("Failed to parse XML string:", remainder, ex);
     throw new Error(ex.message)
   }
+  return xmlDocument;
+}
+
+/*
+ * Extract resourceUrl, title and description values from an XMP XML Document
+ *
+ * @param {XmlDocument} xmlDocument
+ * @returns {} An object with resourceUrl, title and description properties
+*/
+function getImageMetadataFromXMPDocument(xmlDocument) {
+  const descriptionElem = xmlDocument.querySelector("Description");
   const metadata = {
     // <rdf:Description rdf:about=".."  >
-    resourceUrl: xmlDocument.querySelector("Description")?.getAttribute("rdf:about"),
+    resourceUrl: descriptionElem?.getAttribute("rdf:about"),
     // <dc:title> <rdf:li>...
     title: xmlDocument.querySelector("title li")?.textContent,
     // <rdf:Description> <dc:description> <rdf:li>...
     description: xmlDocument.querySelector("Description > description li")?.textContent,
   };
+  const extended = {};
+  for (const attr of descriptionElem.attributes) {
+    if (attr.prefix && attr.prefix !== "xmlns") {
+      let nameValues = extended[attr.prefix] || (extended[attr.prefix] = {});
+      nameValues[attr.localName] = attr.value;
+    }
+  }
+  metadata.extended = extended;
   return metadata;
 }
 
@@ -324,10 +343,11 @@ function insertBytes(byteArray, targetBuffer, offset) {
   return newBuffer;
 }
 
-export function insertCustomChunk(imgBuffer, textChunk) {
+function getIHDROffsets(imgBuffer) {
   let offset = 8; // for the signature
   let len = imgBuffer.byteLength;
   let iHDROffsets = [0,0];
+  let chunk;
 
   while(!isNaN(offset) && offset < len) {
     let { nextIndex, chunkType } = getChunkAtIndex(imgBuffer, offset);
@@ -336,10 +356,45 @@ export function insertCustomChunk(imgBuffer, textChunk) {
       // we'll insert our textChunk right after the IHDR
       iHDROffsets[0] = offset;
       iHDROffsets[1] = nextIndex;
+      break;
     }
     offset = nextIndex;
   }
-  // console.log("IHDR offsets:", iHDROffsets);
+  return iHDROffsets;
+}
+
+export function getImageProperties(imgBuffer) {
+  const [offsetIndex] = getIHDROffsets(imgBuffer);
+  if (!offsetIndex) {
+    // there should be at least the signature before the iHDR chunk
+    return null;
+  }
+  const iHDRChunk = getChunkAtIndex(imgBuffer, offsetIndex);
+  const dv = iHDRChunk.chunkDataView;
+  // from the spec: https://www.libpng.org/pub/png/spec/1.2/PNG-Chunks.html
+  // Width:              4 bytes
+  // Height:             4 bytes
+  // Bit depth:          1 byte
+  // Color type:         1 byte
+  // Compression method: 1 byte
+  // Filter method:      1 byte
+  // Interlace method:   1 byte
+  const properties = {
+    width: dv.getInt32(0),
+    height: dv.getInt32(4),
+    bitDepth: dv.getInt8(8),
+    colorType: dv.getInt8(9),
+    compression: dv.getInt8(10),
+    filter: dv.getInt8(11),
+    interlace: dv.getInt8(12),
+  };
+  return properties;
+}
+
+export function insertCustomChunk(imgBuffer, textChunk) {
+  let offset = 8; // for the signature
+  let len = imgBuffer.byteLength;
+  let iHDROffsets = getIHDROffsets(imgBuffer);
   return insertBytes(textChunk, imgBuffer, iHDROffsets[1]);
 }
 

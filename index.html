@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PNG with XMP/iTXT</title>
+  <style type="text/css">
+    img {
+      width: 64px;
+      height: 64px;
+    }
+    h1 { font-size: 1.2em }
+    h2 {
+      display: block;
+      font-size: 12px;
+      background-color: #ccc;
+      color: #fff;
+      padding: 4px;
+      margin-inline: -4px;
+      margin-block: -4px 8px;
+    }
+    body {
+      box-sizing: border-box;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    #panels {
+      display: flex;
+      flex-direction: row;
+      gap: 10px;
+    }
+    #panels > div {
+      overflow: auto;
+    }
+    #input-panel {
+      width: 50%;
+    }
+    .content {
+      position: relative;
+      border: 2px solid transparent;
+      padding: 4px;
+    }
+    #drop-zone {
+      border: 2px dashed #ccc;
+    }
+    #drop-zone::before {
+      display: block;
+      position: absolute;
+      font-size: 12px;
+      top: 50%; 
+      left: calc(50% - 4rem);
+      content: "drop image here";
+      background-color: #ccc;
+      color: #fff;
+      padding: 4px;
+    }
+    form {
+      display: grid;
+      grid-template-columns: 8em 1fr;
+      gap: 0.3em;
+      margin-block: 0.8em;
+    }
+    p.line { 
+      margin-block: 1px; padding: 0.2em;
+      display: contents;
+    }
+
+    .panel {
+      width: 50%;
+      padding: 4px;
+      border: 2px solid #eee;
+    }
+  </style>
+  <script type="module">
+    import { 
+      getChunksFromPNGArrayBuffer, 
+      getChunkAtIndex, 
+      getImageMetadata, 
+      getImageProperties,
+      insertXMPMetaDataIntoImageBuffer
+    } from "./png-text-chunks.mjs";
+
+    const emptyImageSrc = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+    async function fetchImageAsArrayBuffer(url) {
+      const response = await fetch(url);
+      return response.arrayBuffer();
+    }
+
+    function blobToDataUrl(blob){
+      let reader = new FileReader()
+      return new Promise(resolve => {
+        reader.onload = function(){
+          resolve(reader.result);
+        }
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    const metadataViewer = window.metadataViewer = new (class _ViewerApp {
+      propsFieldNamesMapping = {
+        title: "img-title",
+        description: "img-description",
+        resourceUrl: "img-resource-url",
+      };
+      fieldNamesPropsMapping = {
+        "img-title": "title",
+        "img-description": "description",
+        "img-resource-url": "resourceUrl",
+      };
+
+      init() {
+        this.currentMetadata = null;
+        this.dropTarget = document.getElementById('drop-zone');
+        this.dropTarget.addEventListener('dragover', this);
+        this.dropTarget.addEventListener('drop', this);
+
+        this.sourceImage = document.getElementById("source-img");
+        this.sourceImage.addEventListener("load", (e) => {
+          this.initWithImage(this.sourceImage, { fileName: this.sourceImage.dataset.fileName });
+        });
+        this.sourceForm = document.getElementById("source-metadata-form");
+        this.sourceForm.reset();
+        this.outputForm = document.getElementById("output-metadata-form");
+        this.outputForm.reset();
+
+        if (this.sourceImage.complete) {
+          let fileName = this.sourceImage.src.split("/").pop();
+          this.sourceImage.dataset.fileName = fileName;
+          this.initWithImage(document.getElementById("source-img"), { fileName });
+        }
+
+        this.outputForm.addEventListener("change", this);
+      }
+      reset() {
+        this.sourceForm.reset();
+        this.outputForm.reset();
+      }
+      handleEvent(event) {
+        if (event.type == "dragover") {
+          event.preventDefault(); // Prevent default behavior (Prevent file from being opened)
+          event.stopPropagation();
+          event.dataTransfer.dropEffect = 'copy'; // Show the copy icon when dragging over (optional)
+          return;
+        }
+        if (event.type == "drop") {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer.files.length) {
+            let file = event.dataTransfer.files[0];
+            console.log("Dropped file:", file);
+            if (file.type.startsWith('image/')) {
+              // Assuming the file is an image
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                this.sourceImage.dataset.fileName = file.name;
+                this.sourceImage.src = e.target.result;
+              };
+              reader.readAsDataURL(file); // Read the file as a Data URL
+            } else {
+              alert('Please drop an image file.');
+              this.reset();
+            }
+          }
+          return;
+        }
+        if (event.type == "change") {
+          this.handleMetadataChange();
+          return;
+        }
+      }
+      populateForms(currentValues) {
+        this.currentMetadata = currentValues;
+        for (let form of [this.sourceForm, this.outputForm]) {
+          for (let field of form.elements) {
+            let propId = field.name && this.fieldNamesPropsMapping[field.name];
+            if (propId) {
+              // use setAttribute so we can reset to an "original" value
+              field.setAttribute("value", currentValues[propId] || "");
+            }
+          }
+        }
+      }
+      dispatchChangeEvent(data) {
+        let event = new CustomEvent("xmp-change-action", {
+          bubbles: true,
+          detail: {
+            data,
+          }
+        });
+        console.log("dispatchEvent", event);
+        this.sourceImage.dispatchEvent(event);
+      }
+      handleMetadataChange() {
+        let currentValues = this.currentMetadata || {};
+        let hasChanged = false;
+        for (let field of this.outputForm.elements) {
+          let propId = field.name && this.fieldNamesPropsMapping[field.name];
+          if (!propId) {
+            continue;
+          }
+          let value = field.value;
+          if (value !== currentValues[propId]) {
+            hasChanged = true;
+            currentValues[propId] = field.value;
+          }
+        }
+        this.currentMetadata = currentValues;
+        console.log(`change? ${hasChanged}, metadata:`, currentValues);
+        if (hasChanged) {
+          this.dispatchChangeEvent(currentValues);
+        }
+      }
+
+      async initWithImage(img, details = {}) {
+        let start = performance.now();
+        const imgBuffer = await fetchImageAsArrayBuffer(img.src);
+        performance.measure("get-image-array-buffer", {
+          start
+        });
+        const imgProperties = getImageProperties(imgBuffer);
+        document.getElementById("img-size")
+          .textContent = `(${imgProperties.width} x ${imgProperties.height} pixels)`;
+
+        start = performance.now();
+        return getImageMetadata(imgBuffer).then(metadata => {
+          performance.measure("metadata-extraction", { start });
+          const combinedData = {
+            ...details,
+            ...metadata
+          };
+          this.populateForms(combinedData);
+          this.dispatchChangeEvent(combinedData);
+        });
+      }
+    })();
+
+
+    const metadataWriter = window.metadataWriter = new (class _WriterApp {
+      init() {
+        document.addEventListener("xmp-change-action", this);
+        this.outputImage = document.getElementById("output-img");
+        this.downloadLink = document.getElementById("download-link");
+      }
+      handleEvent(event) {
+        if (event.type == "xmp-change-action") {
+          console.log("got xmp-change-action event:", event.detail);
+          let sourceFilename = event.detail.filename || event.target.dataset.fileName;
+          this.updateOutput(event.target, event.detail.data, sourceFilename)
+        }
+      }
+      async updateOutput(sourceImage, metadata, downloadFilename = "xmp-image.png") {
+        let modifiedImgBuffer;
+        const startMarker = performance.now();
+        const sourceImgBuffer = await fetchImageAsArrayBuffer(sourceImage.src);
+        performance.measure("xmp-image-array-buffer", {
+          start: startMarker,
+        });
+
+        if (metadata.resourceUrl || metadata.title || metadata.description) {
+          performance.mark("xmp-metadata-insertion-start")
+
+          console.log("updateOutput, insert xmp:", metadata);
+          modifiedImgBuffer = await insertXMPMetaDataIntoImageBuffer(
+            sourceImgBuffer, 
+            metadata, 
+            // extended metadata - we provide namespace, url and property name/values
+            { 
+              tst: [
+                "http://example.com/xmp/tst", 
+                {
+                  testerVersion: "0.9"
+                },
+              ],
+            }
+          );
+          performance.measure("xmp-metadata-insertion", { start: "xmp-metadata-insertion-start" });
+        } else {
+          console.log("No metadata to write, skipping creating a new output image");
+        }
+        const imageBlob = new Blob([modifiedImgBuffer || sourceImgBuffer], { type: 'image/png' });
+
+        const url = URL.createObjectURL(imageBlob);
+        let dataUrl = await blobToDataUrl(imageBlob);
+
+        this.updateDownloadLink(dataUrl, downloadFilename);
+        this.outputImage.onload = () => {
+          URL.revokeObjectURL(url);
+        };
+        this.outputImage.src = url;
+      }
+      updateDownloadLink(url, downloadFilename) {
+        this.downloadLink.href = url;
+        this.downloadLink.setAttribute("download", downloadFilename);
+      }
+    });
+
+    window.onload = () => {
+      metadataViewer.init();
+      metadataWriter.init();
+    }
+  </script>
+</head>
+<body>
+  <h1>Display XMP Metadata in a PNG with XMP/iTXT chunk</h1>
+  <section id="panels">
+    <div id="input-panel" class="panel">
+      <h2>Source <span id="img-size"></span></h2>
+      <details>
+        <summary>XMP metadata</summary>
+        <form id="source-metadata-form">
+          <p class="line"><label for="src-img-title">Title</label><input type="text" id="src-img-title" name="img-title" disabled readonly></p>
+          <p class="line"><label for="src-img-description">Description</label><input type="text" id="src-img-description" name="img-description" disabled readonly></p>
+          <p class="line"><label for="src-img-resource-url">Resource URL</label><input type="text" id="src-img-resource-url" name="img-resource-url" disabled readonly></p>
+        </form>
+      </details>
+      <div id="drop-zone" class="content">
+        <img id="source-img" src="./2x2-js-tagged.png">
+      </div>
+    </div>
+    <div id="output-panel" class="panel">
+      <h2>Output</h2>
+      <details>
+        <summary>XMP metadata</summary>
+        <form id="output-metadata-form">
+          <p class="line"><label for="out-img-title">Title</label><input type="text" id="out-img-title" name="img-title"></p>
+          <p class="line"><label for="out-img-description">Description</label><input type="text" id="out-img-description" name="img-description"></p>
+          <p class="line"><label for="out-img-resource-url">Resource URL</label><input type="text" id="out-img-resource-url" name="img-resource-url"></p>
+        </form>
+      </details>
+      <div  class="content">
+        <a href="#" id="download-link">
+          <img id="output-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"><br>Download XMP tagged image
+        </a>
+      </div>
+    </div>
+  </section>
+
+</p>
+</body>
+</html>
